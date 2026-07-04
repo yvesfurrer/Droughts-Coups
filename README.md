@@ -30,8 +30,8 @@ Sustained, year-round drought (SPEI-12, December, lagged one year) significantly
 R 4.4.2. Required packages are installed automatically in section 0 of the script.
 
 ## Contact
-Yves Furrer
-yves.furrer@stud.unilu.ch
+Yves Furrer,
+yves.furrer@stud.unilu.ch,
 Master's Programm:
-Philosophy, Politics and Economy
+Philosophy, Politics and Economy,
 University of Lucerne
