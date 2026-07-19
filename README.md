@@ -9,7 +9,7 @@ Sustained, year-round drought (SPEI-12, December, lagged one year) is associated
 
 ## Contents
 - `droughts_coups_analysis.R`: full R script (data preparation, analysis, robustness checks, tables)
-- Tables 1-4 and appendix tables A1-A4 of the paper are written to `Output/` when the script is run
+- `Output/`: generated tables (Tables 1-4 and appendix tables A1-A5 of the paper)
 
 ## Data sources (not included, freely available)
 - Coup attempts: Powell & Thyne (2011), Coup d'État Dataset (data and codebook), http://www.uky.edu/~clthyn2/coup_data/home.html
