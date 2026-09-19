@@ -1,9 +1,6 @@
 ###############################################################################
 # Masterseminarpaper: Droughts & Coups in Africa
 # Author: Yves Furrer
-# Main IV: SPEI-12 (December) = full calendar-year water balance
-# Part A: Data preparation (coups, SPEI 3/6/12/24, WDI)
-# Part B: Descriptives, Analysis (H1-H4), Robustness, Time scales, Tables
 #
 # NOTE ON RE-RUNS: set RUN_DATA_PREP <- FALSE after the first successful
 # run; the script then loads the saved panel and jumps to the analysis.
@@ -33,12 +30,14 @@ library(geodata); library(exactextractr); library(flextable)
 
 # ------------------------------------------------------------------ #
 # 1. Paths & parameters
+#    All paths are relative to the project root; run the script from
+#    the repository folder (or set the working directory there first).
 # ------------------------------------------------------------------ #
-path_coup   <- "C:/Users/yfurr/Documents/1 - UNILU/Masterseminararbeit 1/R/Data/raw/powell_thyne_ccode_year.csv"
-path_spei03 <- "C:/Users/yfurr/Documents/1 - UNILU/Masterseminararbeit 1/R/Data/raw/spei03.nc"
-path_spei06 <- "C:/Users/yfurr/Documents/1 - UNILU/Masterseminararbeit 1/R/Data/raw/spei06.nc"
-path_spei12 <- "C:/Users/yfurr/Documents/1 - UNILU/Masterseminararbeit 1/R/Data/raw/spei12.nc"
-path_spei24 <- "C:/Users/yfurr/Documents/1 - UNILU/Masterseminararbeit 1/R/Data/raw/spei24.nc"
+path_coup   <- "Data/raw/powell_thyne_ccode_year.csv"
+path_spei03 <- "Data/raw/spei03.nc"
+path_spei06 <- "Data/raw/spei06.nc"
+path_spei12 <- "Data/raw/spei12.nc"
+path_spei24 <- "Data/raw/spei24.nc"
 path_wdi    <- "Data/raw/wdi_raw.rds"       # local cache of WDI downloads
 path_panel  <- "Data/processed/panel.rds"   # relative to getwd()
 
@@ -81,6 +80,8 @@ if (RUN_DATA_PREP) {
     left_join(mil     %>% select(iso3c, year, mil_exp),    by = c("iso3c", "year")) %>%
     left_join(agr     %>% select(iso3c, year, agr_growth), by = c("iso3c", "year")) %>%
     left_join(agshare %>% select(iso3c, year, agr_share),  by = c("iso3c", "year")) %>%
+    # countrycode warns about WDI aggregate codes (AFE, ARB, SSF, WLD, ...);
+    # these are not countries and are removed by the continent filter below
     mutate(continent = countrycode(iso3c, "iso3c", "continent")) %>%
     filter(continent == "Africa") %>%
     select(iso3c, country, year, gdp_growth, mil_exp, agr_growth, agr_share)
@@ -94,6 +95,8 @@ if (RUN_DATA_PREP) {
     mutate(across(starts_with("coup"), ~replace(., is.na(.), 0)),
            coup_attempt = as.integer(coup1 %in% c(1, 2) | coup2 %in% c(1, 2) |
                                        coup3 %in% c(1, 2) | coup4 %in% c(1, 2)),
+           # countrycode warns about Gleditsch-Ward codes outside Africa and
+           # about Somaliland (no ISO code); both are dropped by the filter below
            iso3c = countrycode(ccode, "gwn", "iso3c")) %>%
     filter(!is.na(iso3c), year >= year_start, year <= year_end) %>%
     group_by(iso3c, year) %>%
@@ -247,6 +250,14 @@ if (RUN_DATA_PREP) {
 # Part B: Descriptives and Analysis (main IV: SPEI-12, December, t-1)
 ###############################################################################
 
+# states enter the panel upon independence: a coup attempt is not defined
+# for years in which the state did not exist (pre-1993 Eritrea is covered
+# by Ethiopia, pre-2011 South Sudan by Sudan in the coup data); placed in
+# Part B so the filter also applies when the cached panel is loaded
+panel <- panel %>%
+  filter(!(iso3c == "ERI" & year < 1993),
+         !(iso3c == "SSD" & year < 2011))
+
 dir.create("Output", showWarnings = FALSE)
 pdat <- pdata.frame(panel, index = c("iso3c", "year"))
 
@@ -275,15 +286,27 @@ panel <- panel %>%
 # 9. Descriptive statistics (Appendix tables A3, A4)
 # ------------------------------------------------------------------ #
 
-# A4: country list with number of coup attempts
-panel %>% group_by(country) %>%
+# A4: country list with number of coup attempts (console check; MUS and SYC
+#     are dropped so the count matches the 52-country analysis universe
+#     of Chapter 3.2 and the Word table written in section 17)
+panel %>% filter(!iso3c %in% c("MUS", "SYC")) %>%
+  group_by(country) %>%
   summarise(coups = sum(coup_attempt)) %>%
   arrange(desc(coups)) %>% print(n = 60)
 
 # A3: summary statistics of the main variables
-datasummary_skim(panel %>% select(coup_attempt, spei12_dec, gdp_growth_w,
-                                  mil_exp, agr_growth_w),
-                 output = "Output/tableA3_summary.docx")
+#     The variables are renamed explicitly. as.numeric() strips the WDI
+#     variable labels, which would otherwise override these names and
+#     report the winsorised series under the label of the raw series.
+a3 <- panel %>%
+  transmute(
+    `Coup attempt (0/1)`                         = coup_attempt,
+    `SPEI-12 (December)`                         = as.numeric(spei12_dec),
+    `GDP p.c. growth (annual %, wins.)`          = as.numeric(gdp_growth_w),
+    `Military expenditure (% of gov. exp.)`      = as.numeric(mil_exp),
+    `Agri. value added growth (annual %, wins.)` = as.numeric(agr_growth_w))
+
+datasummary_skim(a3, output = "Output/tableA3_summary.docx")
 
 # ------------------------------------------------------------------ #
 # 10. H3: Drought and economic conditions (plausibility check)
@@ -348,6 +371,16 @@ m_h2 <- glm(coup_attempt ~ drought12_cat_l1 + gdp_growth_w + mil_exp + decade,
             data = panel, family = binomial)
 coeftest(m_h2, vcov = vcovCL(m_h2, cluster = ~ iso3c, data = panel))
 
+# Firth correction for the sparse intensity cells: the severe and extreme
+# categories rest on few country-years, exactly the setting the penalised
+# likelihood is designed for
+mdat_h2 <- panel %>%
+  select(coup_attempt, drought12_cat_l1, gdp_growth_w, mil_exp, decade, iso3c) %>%
+  na.omit()
+m_h2_firth <- logistf(coup_attempt ~ drought12_cat_l1 + gdp_growth_w + mil_exp + decade,
+                      data = mdat_h2)
+summary(m_h2_firth)
+
 # ------------------------------------------------------------------ #
 # 13. H4: Timing of the effect (SPEI-12)
 # ------------------------------------------------------------------ #
@@ -375,7 +408,7 @@ coeftest(m_h4_lags, vcov = vcovCL(m_h4_lags, cluster = ~ iso3c, data = panel))
 
 # (i) Firth logit (rare events bias correction)
 mdat <- panel %>%
-  select(coup_attempt, spei12_dec_l1, gdp_growth_w, mil_exp, decade, iso3c) %>%
+  select(coup_attempt, spei12_dec_l1, gdp_growth_w, mil_exp, decade, year, iso3c) %>%
   na.omit()
 m_firth <- logistf(coup_attempt ~ spei12_dec_l1 + gdp_growth_w + mil_exp + decade,
                    data = mdat)
@@ -480,10 +513,14 @@ if (file.exists(path_pw)) {
   dec <- which(month(dts) == 12 & year(dts) >= year_start & year(dts) <= year_end)
   stopifnot(length(dec) == year_end - year_start + 1)
   r12  <- r12[[dec]]
-  popc <- terra::resample(pop, r12[[1]]) * cellSize(r12[[1]], unit = "km")
+  # 10' -> 30' density with na.rm (no NA bleed at coasts), then align to
+  # the SPEI grid; default_weight = 0 treats remaining no-data cells as
+  # weight zero instead of dropping the whole country
+  pop05 <- terra::aggregate(pop, fact = 3, fun = "mean", na.rm = TRUE)
+  popc  <- terra::resample(pop05, r12[[1]], method = "near") * cellSize(r12[[1]], unit = "km")
   
   wtab <- exact_extract(r12, africa, "weighted_mean", weights = popc,
-                        progress = FALSE)
+                        default_weight = 0, progress = FALSE)
   wtab <- data.frame(iso3c = africa$iso3c, wtab)
   names(wtab)[-1] <- paste0("y", year_start:year_end)
   spei12w <- wtab %>%
@@ -503,6 +540,148 @@ m_pw <- glm(coup_attempt ~ spei12_pw_l1 + gdp_growth_w + mil_exp + decade,
             data = panel, family = binomial)
 coeftest(m_pw, vcov = vcovCL(m_pw, cluster = ~ iso3c, data = panel))
 
+# (x) two-way clustered SEs (country and year): droughts are spatially
+#     correlated across neighbours and coups cluster in time, so
+#     country-only clustering may understate the uncertainty
+coeftest(m_h1_l1, vcov = vcovCL(m_h1_l1, cluster = ~ iso3c + year, data = panel))
+
+# (xi) excluding the 2020s coup wave: years 1990-2019 only
+panel_pre <- panel %>% filter(year <= 2019) %>% mutate(decade = droplevels(decade))
+m_pre20 <- glm(coup_attempt ~ spei12_dec_l1 + gdp_growth_w + mil_exp + decade,
+               data = panel_pre, family = binomial)
+coeftest(m_pre20, vcov = vcovCL(m_pre20, cluster = ~ iso3c, data = panel_pre))
+cat("coup attempts 1990-2019:", sum(panel_pre$coup_attempt), "of 77\n")
+
+cc <- panel %>% filter(!is.na(spei12_dec_l1), !is.na(gdp_growth_w), !is.na(mil_exp))
+cat("main estimation sample after state-membership filter: N =", nrow(cc), "\n")
+cat("coup attempts in the estimation sample:",
+    sum(cc$coup_attempt[cc$year <= 2019]), "in 1990-2019,",
+    sum(cc$coup_attempt[cc$year >= 2020]), "in 2020-2023\n")
+
+# (xii) linear year trend instead of decade dummies: the sample-wide drying
+#       trend is not absorbed within decades (year centred at 2006)
+m_trend <- glm(coup_attempt ~ spei12_dec_l1 + gdp_growth_w + mil_exp + I(year - 2006),
+               data = panel, family = binomial)
+coeftest(m_trend, vcov = vcovCL(m_trend, cluster = ~ iso3c, data = panel))
+
+# (xiii) excluding the six countries of the post-2020 Sahel coup wave
+wave <- c("MLI", "GIN", "BFA", "NER", "TCD", "SDN")
+panel_nw <- panel %>% filter(!iso3c %in% wave)
+m_nowave <- glm(coup_attempt ~ spei12_dec_l1 + gdp_growth_w + mil_exp + decade,
+                data = panel_nw, family = binomial)
+coeftest(m_nowave, vcov = vcovCL(m_nowave, cluster = ~ iso3c, data = panel_nw))
+cat("coup attempts without the wave countries:", sum(panel_nw$coup_attempt), "of 77\n")
+
+# (xiv) placebo: future drought (t+1) must not predict current coups;
+#       estimated jointly with t-1, because drought persistence would let
+#       an isolated lead pick up an echo of past dryness
+panel <- panel %>%
+  arrange(iso3c, year) %>%
+  group_by(iso3c) %>%
+  mutate(spei12_dec_f1 = dplyr::lead(spei12_dec, 1)) %>%
+  ungroup()
+m_placebo <- glm(coup_attempt ~ spei12_dec_l1 + spei12_dec_f1 +
+                   gdp_growth_w + mil_exp + decade,
+                 data = panel, family = binomial)
+coeftest(m_placebo, vcov = vcovCL(m_placebo, cluster = ~ iso3c, data = panel))
+
+# (xv) functional form: dry and wet components entered separately, so the
+#      estimate is identified from the dry side rather than from
+#      stabilising wet years (dry_l1 = drought magnitude, expected positive)
+panel <- panel %>%
+  mutate(dry_l1 = pmax(0, -spei12_dec_l1),
+         wet_l1 = pmax(0,  spei12_dec_l1))
+m_split <- glm(coup_attempt ~ dry_l1 + wet_l1 + gdp_growth_w + mil_exp + decade,
+               data = panel, family = binomial)
+coeftest(m_split, vcov = vcovCL(m_split, cluster = ~ iso3c, data = panel))
+
+# (xvi) year fixed effects via Firth logit: with only 77 events, a full set
+#       of year dummies gives roughly two events per parameter, and years
+#       without a single coup attempt are perfectly predicted (quasi-
+#       complete separation); the penalised likelihood handles both
+print(table(factor(panel$year[panel$coup_attempt == 1],
+                   levels = year_start:year_end)))  # zero-coup years visible
+m_yearfe <- logistf(coup_attempt ~ spei12_dec_l1 + gdp_growth_w + mil_exp +
+                      factor(year), data = mdat)
+cat("Year-FE Firth: SPEI-12 t-1 =", round(coef(m_yearfe)["spei12_dec_l1"], 3),
+    "| p =", signif(m_yearfe$prob["spei12_dec_l1"], 3), "\n")
+
+# (xvii) military control and sample composition: listwise deletion costs
+#        31 of the 77 coup years, almost all of them through military
+#        expenditure as a share of government expenditure. The check
+#        replaces that series with military expenditure as a share of GDP
+#        (SIPRI via WDI, wider coverage), drops the military control
+#        altogether, and re-estimates the reduced models on the two
+#        restricted samples, so that the control and the sample can be
+#        told apart. Console output only, no publication table is changed
+
+# which series is the binding constraint among the coup years?
+vars_main <- c("spei12_dec_l1", "gdp_growth_w", "mil_exp")
+cat("missing values among the", sum(panel$coup_attempt), "coup years:\n")
+print(colSums(is.na(panel[panel$coup_attempt == 1, vars_main])))
+
+# alternative military control, cached like the other downloads
+path_milgdp <- "Data/raw/wdi_mil_gdp.rds"
+if (file.exists(path_milgdp)) {
+  mil_gdp <- readRDS(path_milgdp)
+} else {
+  mil_gdp <- WDI(country = "all",
+                 indicator = c(mil_gdp = "MS.MIL.XPND.GD.ZS"),
+                 start = year_start, end = year_end) %>%
+    filter(!is.na(iso3c), iso3c != "") %>%
+    distinct(iso3c, year, .keep_all = TRUE) %>%
+    select(iso3c, year, mil_gdp)
+  dir.create(dirname(path_milgdp), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(mil_gdp, path_milgdp)
+}
+
+panel <- panel %>%
+  select(-any_of("mil_gdp")) %>%              # idempotent re-runs
+  left_join(mil_gdp, by = c("iso3c", "year"))
+
+cat("coverage in the panel: mil_exp",
+    round(100 * mean(!is.na(panel$mil_exp)), 1), "%, mil_gdp",
+    round(100 * mean(!is.na(panel$mil_gdp)), 1), "%\n")
+
+m_milgdp <- glm(coup_attempt ~ spei12_dec_l1 + gdp_growth_w + mil_gdp + decade,
+                data = panel, family = binomial)
+coeftest(m_milgdp, vcov = vcovCL(m_milgdp, cluster = ~ iso3c, data = panel))
+
+m_nomil <- glm(coup_attempt ~ spei12_dec_l1 + gdp_growth_w + decade,
+               data = panel, family = binomial)
+coeftest(m_nomil, vcov = vcovCL(m_nomil, cluster = ~ iso3c, data = panel))
+
+# same reduced model on the two restricted samples
+smp_exp <- complete.cases(panel[, c("coup_attempt", "spei12_dec_l1",
+                                    "gdp_growth_w", "mil_exp", "decade")])
+smp_gdp <- complete.cases(panel[, c("coup_attempt", "spei12_dec_l1",
+                                    "gdp_growth_w", "mil_gdp", "decade")])
+
+m_nomil_sexp <- glm(coup_attempt ~ spei12_dec_l1 + gdp_growth_w + decade,
+                    data = panel[smp_exp, ], family = binomial)
+m_nomil_sgdp <- glm(coup_attempt ~ spei12_dec_l1 + gdp_growth_w + decade,
+                    data = panel[smp_gdp, ], family = binomial)
+
+# compact overview of the SPEI-12 t-1 coefficient across the five fits
+spei_row <- function(m, lab, d) {
+  ct <- coeftest(m, vcov = vcovCL(m, cluster = ~ iso3c, data = d))
+  data.frame(Specification = lab,
+             b  = round(ct["spei12_dec_l1", 1], 3),
+             SE = round(ct["spei12_dec_l1", 2], 3),
+             p  = round(ct["spei12_dec_l1", 4], 4),
+             N  = nobs(m),
+             `Coup years` = sum(model.frame(m)$coup_attempt),
+             check.names = FALSE)
+}
+
+military_tab <- rbind(
+  spei_row(m_h1_l1,      "Mil. exp. (% gov. exp.)",       panel),
+  spei_row(m_nomil_sexp, "No mil. control, same sample",  panel[smp_exp, ]),
+  spei_row(m_milgdp,     "Mil. exp. (% of GDP)",          panel),
+  spei_row(m_nomil_sgdp, "No mil. control, same sample",  panel[smp_gdp, ]),
+  spei_row(m_nomil,      "No mil. control, full sample",  panel))
+print(military_tab, row.names = FALSE)
+
 # ------------------------------------------------------------------ #
 # 15. Time-scale profile: which temporal signature of drought matters?
 #     SPEI-3 (acute) / SPEI-6 (season) / SPEI-12 (year) / SPEI-24 (2 yrs)
@@ -521,9 +700,42 @@ m_scale24 <- glm(coup_attempt ~ spei24_dec_l1 + gdp_growth_w + mil_exp + decade,
                  data = panel, family = binomial)
 coeftest(m_scale24, vcov = vcovCL(m_scale24, cluster = ~ iso3c, data = panel))
 
+# inference on the time-scale contrast: comparing significance levels is not
+# a test of the coefficient difference (Gelman & Stern 2006); clustered
+# pairs bootstrap over countries for the SPEI-12 vs. SPEI-3 difference
+set.seed(1990)
+B <- 1000
+ctry <- unique(panel$iso3c)
+boot_diff <- rep(NA_real_, B)
+for (b in seq_len(B)) {
+  draw <- sample(ctry, length(ctry), replace = TRUE)
+  bd   <- dplyr::bind_rows(lapply(draw, function(cc) panel[panel$iso3c == cc, ]))
+  b12  <- tryCatch(coef(glm(coup_attempt ~ spei12_dec_l1 + gdp_growth_w +
+                              mil_exp + decade, data = bd, family = binomial))["spei12_dec_l1"],
+                   error = function(e) NA_real_)
+  b03  <- tryCatch(coef(glm(coup_attempt ~ spei3_oct_l1 + gdp_growth_w +
+                              mil_exp + decade, data = bd, family = binomial))["spei3_oct_l1"],
+                   error = function(e) NA_real_)
+  boot_diff[b] <- b12 - b03
+}
+boot_diff <- boot_diff[is.finite(boot_diff)]
+cat("bootstrap draws used:", length(boot_diff), "of", B, "\n")
+cat("difference SPEI-12 minus SPEI-3 (point estimate):",
+    round(unname(coef(m_h1_l1)["spei12_dec_l1"] - coef(m_scale03)["spei3_oct_l1"]), 3), "\n")
+cat("bootstrap 95% CI:", round(unname(quantile(boot_diff, c(0.025, 0.975))), 3), "\n")
+cat("share of draws with difference >= 0:", round(mean(boot_diff >= 0), 3), "\n")
+
 # ------------------------------------------------------------------ #
 # 16. Publication tables (modelsummary -> Word)
 # ------------------------------------------------------------------ #
+
+# GOF rows: "N" and "Log-likelihood" (logit tables), "N" and "R2" (plm)
+gof_logit <- list(
+  list(raw = "nobs",   clean = "N",              fmt = 0),
+  list(raw = "logLik", clean = "Log-likelihood", fmt = 3))
+gof_plm <- list(
+  list(raw = "nobs",      clean = "N",  fmt = 0),
+  list(raw = "r.squared", clean = "R2", fmt = 3))
 
 # Table 1: H1, H2, H4 (drought & coups, SPEI-12)
 cm_coup <- c("spei12_dec"                = "SPEI-12 (Dec), t",
@@ -537,16 +749,18 @@ cm_coup <- c("spei12_dec"                = "SPEI-12 (Dec), t",
              "mil_exp"                   = "Military expenditure")
 
 modelsummary(
-  list("H1: t" = m_h1, "H1: t-1" = m_h1_l1, "No controls" = m_h1_nc,
-       "H2: intensity" = m_h2, "H4: onset" = m_h4, "H4: lags" = m_h4_l2),
-  vcov = ~ iso3c, coef_map = cm_coup, stars = TRUE,
-  gof_omit = "IC|RMSE|Std.Errors",
-  notes = "Logit. Decade dummies included. SE clustered by country. Col. 3 excludes the economic controls.",
+  list("H1: SPEI t" = m_h1, "H1: SPEI t-1" = m_h1_l1,
+       "H1: No controls" = m_h1_nc, "H2: Intensity" = m_h2,
+       "H4: Onset" = m_h4, "H4: Lags" = m_h4_l2),
+  vcov = ~ iso3c, coef_map = cm_coup, stars = c("+" = .1, "*" = .05, "**" = .01, "***" = .001),
+  gof_map = gof_logit,
+  notes = "Logit. Decade dummies included. SE clustered by country.",
   output = "Output/table1_coups.docx")
 
-# Table 2: robustness (incl. pre-existing downturn)
+# Table 2: robustness (incl. pre-existing downturn and pop-weighted SPEI)
 cm_rob <- c("spei12_dec_l1"          = "SPEI-12 (Dec), t-1",
             "spei6_mean_l1"          = "SPEI-6 (ann. mean), t-1",
+            "spei12_pw_l1"           = "SPEI-12 pop.-weighted, t-1",
             "drought12_dur_l1"       = "Drought duration (yrs), t-1",
             "agr_dep"                = "Agri. dependence",
             "spei12_dec_l1:agr_dep"  = "SPEI-12 t-1 x Agri. dep.",
@@ -556,19 +770,20 @@ cm_rob <- c("spei12_dec_l1"          = "SPEI-12 (Dec), t-1",
 
 modelsummary(
   list("Firth logit" = m_firth, "Interaction" = m_int,
-       "Cond. logit (FE)" = m_clogit, "SSA only" = m_ssa,
-       "Pre-exist. downturn" = m_pre, "Alt. measure" = m_alt,
-       "Duration" = m_dur),
-  vcov = list(NULL, ~ iso3c, NULL, ~ iso3c, ~ iso3c, ~ iso3c, ~ iso3c),
-  coef_map = cm_rob, stars = TRUE,
-  gof_omit = "IC|RMSE|Std.Errors",
-  notes = paste0("Col. 1: penalized ML (Firth) with profile penalized-likelihood ",
+       "Cond. logit (FE)" = m_clogit, "Sub-Saharan" = m_ssa,
+       "Pre-existing downturn" = m_pre, "Alt. measure" = m_alt,
+       "Pop. weighted" = m_pw, "Duration" = m_dur),
+  vcov = list(NULL, ~ iso3c, NULL, ~ iso3c, ~ iso3c, ~ iso3c, ~ iso3c, ~ iso3c),
+  coef_map = cm_rob, stars = c("+" = .1, "*" = .05, "**" = .01, "***" = .001),
+  gof_map = gof_logit,
+  notes = paste0("Col. 1: penalised ML (Firth) with profile penalised-likelihood ",
                  "inference, SE not clustered. Col. 3: conditional logit (Efron ",
-                 "approximation), country strata, model-based SE; countries without ",
+                 "approximation), country strata, model-based SE. Countries without ",
                  "any coup attempt do not contribute to the conditional likelihood ",
                  "(informative sample: ", n_eff_clogit, " country-years in ",
                  n_countries_inf, " countries). All other columns: SE clustered ",
-                 "by country. Decade dummies included."),
+                 "by country. Decade dummies included. Col. 7 uses the ",
+                 "population-weighted SPEI-12 (grid cells weighted by 2020 population)."),
   output = "Output/table2_robustness.docx")
 
 # Table 3: time-scale profile (SPEI-3 / -6 / -12 / -24, each lagged t-1)
@@ -582,22 +797,27 @@ cm_scale <- c("spei3_oct_l1"  = "SPEI-3 (Oct), t-1",
 modelsummary(
   list("SPEI-3" = m_scale03, "SPEI-6" = m_scale06,
        "SPEI-12" = m_h1_l1, "SPEI-24" = m_scale24),
-  vcov = ~ iso3c, coef_map = cm_scale, stars = TRUE,
-  gof_omit = "IC|RMSE|Std.Errors",
+  vcov = ~ iso3c, coef_map = cm_scale, stars = c("+" = .1, "*" = .05, "**" = .01, "***" = .001),
+  gof_map = gof_logit,
   notes = "Logit. Decade dummies included. SE clustered by country.",
   output = "Output/table3_timescales.docx")
 
 # Table 4: plausibility check, economic channel (H3)
-cm_h3 <- c("spei12_dec"         = "SPEI-12 (Dec), t",
-           "lag(spei12_dec, 1)" = "SPEI-12 (Dec), t-1")
+cm_h3 <- c("spei12_dec"         = "SPEI-12, t",
+           "lag(spei12_dec, 1)" = "SPEI-12, t-1")
 
 modelsummary(
-  list("(1) GDP growth" = m_h3, "(2) GDP growth" = m_h3_both,
-       "(3) GDP growth (wins.)" = m_h3_w, "(4) Agri. growth (wins.)" = m_h3_agr),
+  list("GDP growth" = m_h3, "GDP growth (with lag)" = m_h3_both,
+       "GDP growth (wins.)" = m_h3_w,
+       "GDP growth excl. oil (wins.)" = m_h3_ag,
+       "Agri. growth (wins.)" = m_h3_agr),
   vcov = function(x) vcovHC(x, cluster = "group", type = "HC1"),
-  coef_map = cm_h3, stars = TRUE,
-  gof_omit = "IC|RMSE|Adj|Within|FE|Std.Errors",
-  notes = "Country and year fixed effects. SE clustered by country.",
+  coef_map = cm_h3, stars = c("+" = .1, "*" = .05, "**" = .01, "***" = .001),
+  gof_map = gof_plm,
+  notes = paste0("Country and year fixed effects. SE clustered by country. ",
+                 "Col. 4 excludes the nine major oil producers (Algeria, ",
+                 "Angola, Chad, the Republic of Congo, Equatorial Guinea, ",
+                 "Gabon, Libya, Nigeria and South Sudan)."),
   output = "Output/table4_h3.docx")
 
 # ------------------------------------------------------------------ #
@@ -614,7 +834,7 @@ modelsummary(
                "spei12_dec_l3" = "SPEI-12 (Dec), t-3",
                "gdp_growth_w"  = "GDP p.c. growth (wins.)",
                "mil_exp"       = "Military expenditure"),
-  stars = TRUE, gof_omit = "IC|RMSE|Std.Errors",
+  stars = c("+" = .1, "*" = .05, "**" = .01, "***" = .001), gof_map = gof_logit,
   notes = "Logit. Decade dummies included. SE clustered by country.",
   output = "Output/tableA1_lags.docx")
 
@@ -628,15 +848,41 @@ cm_temp <- c("spei12_dec_l1" = "SPEI-12 (Dec), t-1",
 
 modelsummary(
   list("Temporal dependence" = m_temp),
-  vcov = ~ iso3c, coef_map = cm_temp, stars = TRUE,
-  gof_omit = "IC|RMSE|Std.Errors",
+  vcov = ~ iso3c, coef_map = cm_temp, stars = c("+" = .1, "*" = .05, "**" = .01, "***" = .001),
+  gof_map = gof_logit,
   notes = "Logit. Decade dummies included. SE clustered by country. Peace-years polynomial follows Carter & Signorino (2010).",
   output = "Output/tableA2_temporal.docx")
 
-# A4: country list as Word table
-country_tab <- panel %>% group_by(country) %>%
-  summarise(`Coup attempts` = sum(coup_attempt)) %>%
-  arrange(desc(`Coup attempts`))
+# A5: identification and functional-form checks
+cm_id <- c("spei12_dec_l1"  = "SPEI-12 (Dec), t-1",
+           "spei12_dec_f1"  = "SPEI-12 (Dec), t+1 (placebo)",
+           "dry_l1"         = "Dry component, t-1",
+           "wet_l1"         = "Wet component, t-1",
+           "I(year - 2006)" = "Linear year trend",
+           "gdp_growth_w"   = "GDP p.c. growth (wins.)",
+           "mil_exp"        = "Military expenditure")
+
+modelsummary(
+  list("Two-way SE" = m_h1_l1, "1990-2019" = m_pre20, "Linear trend" = m_trend,
+       "Excl. wave" = m_nowave, "Placebo lead" = m_placebo, "Dry/wet split" = m_split),
+  vcov = list(~ iso3c + year, ~ iso3c, ~ iso3c, ~ iso3c, ~ iso3c, ~ iso3c),
+  coef_map = cm_id, stars = c("+" = .1, "*" = .05, "**" = .01, "***" = .001),
+  gof_map = gof_logit,
+  notes = paste0("Logit. Decade dummies included except Col. 3 (linear year ",
+                 "trend). SE clustered by country. Col. 1 clustered by country ",
+                 "and year. Dry component = |min(SPEI, 0)|, wet component = ",
+                 "max(SPEI, 0), so that a positive dry and a negative wet ",
+                 "coefficient both indicate higher coup risk under drier ",
+                 "conditions."),
+  output = "Output/tableA5_identification.docx")
+
+# A4: country list as Word table (excl. MUS/SYC, not covered by SPEIbase,
+#     so the list matches the 52-country analysis universe of Chapter 3.2)
+country_tab <- panel %>%
+  filter(!iso3c %in% c("MUS", "SYC")) %>%
+  group_by(Country = country) %>%
+  summarise(`Coup years` = sum(coup_attempt)) %>%
+  arrange(desc(`Coup years`))
 save_as_docx(flextable(country_tab), path = "Output/tableA4_countries.docx")
 
 
