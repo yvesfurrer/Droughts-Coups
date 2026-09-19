@@ -1,5 +1,5 @@
-# Droughts and Coups in Africa
-Replication materials for the master's seminar paper "Droughts and Political Instability in Africa" (University of Lucerne, MA PPE, 2026).
+# Droughts and Coups d’État in Africa
+Replication materials for the master's seminar paper "Droughts and Coups d’État in Africa: A Quantitative Analysis of Coup Attempts from 1990 to 2023" (University of Lucerne, MA PPE, 2026).
 
 ## Research question
 What is the effect of droughts on coup attempts in Africa? The analysis covers 52 African countries, 1990 to 2023, using a country-year panel.
@@ -34,6 +34,6 @@ R 4.4.2. Required packages are installed automatically in section 0 of the scrip
 ## Contact
 Yves Furrer,
 yves.furrer@stud.unilu.ch,
-Master's Program:
-Philosophy, Politics and Economy,
+Master's Programme:
+Philosophy, Politics and Economics,
 University of Lucerne
