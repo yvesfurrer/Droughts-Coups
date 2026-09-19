@@ -18,15 +18,18 @@ Sustained, year-round drought (SPEI-12, December, lagged one year) is associated
 - World Bank, World Development Indicators, https://databank.worldbank.org/source/world-development-indicators
   - GDP per capita growth (annual %): NY.GDP.PCAP.KD.ZG
   - Military expenditure (% of general government expenditure): MS.MIL.XPND.ZS
+  - Military expenditure (% of GDP, robustness check): MS.MIL.XPND.GD.ZS
   - Agriculture, forestry, and fishing, value added growth (annual %): NV.AGR.TOTL.KD.ZG
   - Agriculture, forestry, and fishing, value added (% of GDP): NV.AGR.TOTL.ZS
 
 ## How to replicate
 1. Download the coup and SPEI data from the sources above into `Data/raw/`
-2. Adjust the file paths in section 1 of the script
-3. Run the script with `RUN_DATA_PREP <- TRUE` (first run only; an internet connection is required for the World Bank API and the population raster)
-4. Intermediate files (`Data/processed/panel.rds`, `Data/processed/spei12_popweighted.rds`) are created automatically; set `RUN_DATA_PREP <- FALSE` for later runs
-5. Tables are written to `Output/`
+2. Run the script with `RUN_DATA_PREP <- TRUE` (first run only; an internet
+   connection is required for the World Bank API and the population raster)
+3. Intermediate files (`Data/processed/panel.rds`,
+   `Data/processed/spei12_popweighted.rds`) are created automatically; set
+   `RUN_DATA_PREP <- FALSE` for later runs
+4. Tables are written to `Output/`
 
 ## Software
 R 4.4.2. Required packages are installed automatically in section 0 of the script. Package versions are documented by the `sessionInfo()` call at the end of the script.
