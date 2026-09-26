@@ -48,7 +48,7 @@ options(timeout = 300)
 RUN_DATA_PREP <- TRUE   # set to FALSE after the first successful run
 
 if (RUN_DATA_PREP) {
-  
+
   # ---------------------------------------------------------------- #
   # 2. World Bank indicators (cached locally after first download)
   # ---------------------------------------------------------------- #
@@ -68,14 +68,14 @@ if (RUN_DATA_PREP) {
     dir.create(dirname(path_wdi), recursive = TRUE, showWarnings = FALSE)
     saveRDS(list(gdp = gdp, mil = mil, agr = agr, agshare = agshare), path_wdi)
   }
-  
+
   clean_wdi <- function(d) d %>%
     filter(!is.na(iso3c), iso3c != "") %>%
     distinct(iso3c, year, .keep_all = TRUE)
-  
+
   gdp <- clean_wdi(gdp); mil <- clean_wdi(mil)
   agr <- clean_wdi(agr); agshare <- clean_wdi(agshare)
-  
+
   wdi <- gdp %>%
     left_join(mil     %>% select(iso3c, year, mil_exp),    by = c("iso3c", "year")) %>%
     left_join(agr     %>% select(iso3c, year, agr_growth), by = c("iso3c", "year")) %>%
@@ -85,23 +85,24 @@ if (RUN_DATA_PREP) {
     mutate(continent = countrycode(iso3c, "iso3c", "continent")) %>%
     filter(continent == "Africa") %>%
     select(iso3c, country, year, gdp_growth, mil_exp, agr_growth, agr_share)
-  
+
   # ---------------------------------------------------------------- #
   # 3. Coup data (Powell & Thyne, ccode/year format)
+  #    ccode is the Correlates of War country code; countrycode warns
+  #    about historical codes outside Africa, which are dropped by the
+  #    join with the African panel below
   # ---------------------------------------------------------------- #
   coup_raw <- read.csv(path_coup, stringsAsFactors = FALSE)
-  
+
   coup <- coup_raw %>%
     mutate(across(starts_with("coup"), ~replace(., is.na(.), 0)),
            coup_attempt = as.integer(coup1 %in% c(1, 2) | coup2 %in% c(1, 2) |
                                        coup3 %in% c(1, 2) | coup4 %in% c(1, 2)),
-           # countrycode warns about Gleditsch-Ward codes outside Africa and
-           # about Somaliland (no ISO code); both are dropped by the filter below
-           iso3c = countrycode(ccode, "gwn", "iso3c")) %>%
+           iso3c = countrycode(ccode, "cown", "iso3c")) %>%
     filter(!is.na(iso3c), year >= year_start, year <= year_end) %>%
     group_by(iso3c, year) %>%
     summarise(coup_attempt = as.integer(any(coup_attempt == 1)), .groups = "drop")
-  
+
   # ---------------------------------------------------------------- #
   # 4. SPEI (all four time scales): aggregate grid -> country-year
   #    spei12_dec : Dec value (Jan-Dec, full calendar year)  [MAIN IV]
@@ -115,7 +116,7 @@ if (RUN_DATA_PREP) {
   africa$iso3c <- countrycode(africa$admin, "country.name", "iso3c")
   africa <- africa[!is.na(africa$iso3c), ]
   africa_v <- vect(africa)
-  
+
   extract_spei <- function(path) {
     r  <- rast(path)
     nc <- nc_open(path)
@@ -138,12 +139,12 @@ if (RUN_DATA_PREP) {
       mutate(year = year(date), month = month(date)) %>%
       select(iso3c, year, month, val)
   }
-  
+
   s03 <- extract_spei(path_spei03)
   s06 <- extract_spei(path_spei06)
   s12 <- extract_spei(path_spei12)
   s24 <- extract_spei(path_spei24)
-  
+
   spei_long <- s12 %>% filter(month == 12) %>%
     select(iso3c, year, spei12_dec = val) %>%
     left_join(s06 %>% group_by(iso3c, year) %>%
@@ -154,7 +155,7 @@ if (RUN_DATA_PREP) {
                 select(iso3c, year, spei3_oct = val),      by = c("iso3c", "year")) %>%
     left_join(s24 %>% filter(month == 12) %>%
                 select(iso3c, year, spei24_dec = val),     by = c("iso3c", "year"))
-  
+
   # ---------------------------------------------------------------- #
   # 5. Merge into country-year panel (base = WDI African countries)
   # ---------------------------------------------------------------- #
@@ -162,17 +163,19 @@ if (RUN_DATA_PREP) {
     left_join(coup,      by = c("iso3c", "year")) %>%
     left_join(spei_long, by = c("iso3c", "year")) %>%
     mutate(coup_attempt = replace(coup_attempt, is.na(coup_attempt), 0L))
-  
+
   # ---------------------------------------------------------------- #
   # 6. Derived variables (ALL of them, so the saved panel is complete)
   # ---------------------------------------------------------------- #
   # 6a. drought indicators on the MAIN IV (SPEI-12, WMO thresholds)
-  #     [WMO 2012, p. 4]: drought <= -1.0; moderate/severe/extreme
+  #     [WMO 2012, p. 4]: drought <= -1.0; moderate/severe/extreme;
+  #     country-years without SPEI data (MUS, SYC) stay NA
   panel <- panel %>%
     arrange(iso3c, year) %>%
     mutate(
       drought12 = as.integer(spei12_dec <= -1.0),
       drought12_cat = case_when(
+        is.na(spei12_dec)  ~ NA_character_,
         spei12_dec <= -2.0 ~ "extreme",
         spei12_dec <= -1.5 ~ "severe",
         spei12_dec <= -1.0 ~ "moderate",
@@ -180,14 +183,14 @@ if (RUN_DATA_PREP) {
       drought12_cat = factor(drought12_cat,
                              levels = c("none", "moderate", "severe", "extreme"))
     )
-  
+
   # 6b. winsorised growth (1st/99th pct) to tame outliers
   q  <- quantile(panel$gdp_growth, c(.01, .99), na.rm = TRUE)
   qa <- quantile(panel$agr_growth, c(.01, .99), na.rm = TRUE)
   panel <- panel %>%
     mutate(gdp_growth_w = pmin(pmax(gdp_growth, q[1]),  q[2]),
            agr_growth_w = pmin(pmax(agr_growth, qa[1]), qa[2]))
-  
+
   # 6c. onset + all lags (grouped by country, dplyr::lag!)
   panel <- panel %>%
     group_by(iso3c) %>%
@@ -205,7 +208,7 @@ if (RUN_DATA_PREP) {
       gdp_growth_w_l1    = dplyr::lag(gdp_growth_w, 1)
     ) %>%
     ungroup()
-  
+
   # 6d. drought duration on SPEI-12 (consecutive years <= -1.0)
   panel <- panel %>%
     arrange(iso3c, year) %>%
@@ -215,7 +218,7 @@ if (RUN_DATA_PREP) {
                                   ave(drought12, run, FUN = cumsum), 0),
            drought12_dur_l1 = dplyr::lag(drought12_dur, 1)) %>%
     ungroup() %>% select(-run)
-  
+
   # 6e. agricultural dependence (country mean of agr_share, median split)
   panel <- panel %>%
     group_by(iso3c) %>%
@@ -223,27 +226,27 @@ if (RUN_DATA_PREP) {
     ungroup() %>%
     mutate(agr_dep = as.integer(agr_share_mean >
                                   median(agr_share_mean, na.rm = TRUE)))
-  
+
   # 6f. decade dummies (avoid year-dummy separation in logit)
   panel$decade <- cut(panel$year, breaks = c(1989, 1999, 2009, 2019, 2023),
                       labels = c("1990s", "2000s", "2010s", "2020s"))
-  
+
   # ---------------------------------------------------------------- #
   # 7. Quick checks & save
   # ---------------------------------------------------------------- #
   print(summary(panel))
   print(table(panel$drought12, useNA = "ifany"))
-  print(table(panel$coup_attempt, useNA = "ifany"))
+  print(table(panel$coup_attempt, useNA = "ifany"))                # expect 80 coup years
   print(panel %>% filter(is.na(spei12_dec)) %>% count(iso3c))  # expect MUS, SYC
-  
+
   dir.create(dirname(path_panel), recursive = TRUE, showWarnings = FALSE)
   saveRDS(panel, path_panel)
-  
+
 } else {
-  
+
   # fast re-entry: load the prepared panel from disk
   panel <- readRDS(path_panel)
-  
+
 }
 
 ###############################################################################
@@ -257,6 +260,9 @@ if (RUN_DATA_PREP) {
 panel <- panel %>%
   filter(!(iso3c == "ERI" & year < 1993),
          !(iso3c == "SSD" & year < 2011))
+
+n_coups <- sum(panel$coup_attempt)   # coup years in the analysis universe
+cat("coup years in the panel:", n_coups, "\n")
 
 dir.create("Output", showWarnings = FALSE)
 pdat <- pdata.frame(panel, index = c("iso3c", "year"))
@@ -420,7 +426,7 @@ m_h1_nc_cc <- glm(coup_attempt ~ spei12_dec_l1 + decade,
 coeftest(m_h1_nc_cc, vcov = vcovCL(m_h1_nc_cc, cluster = ~ iso3c, data = mdat))
 cat("N =", nobs(m_h1_nc_cc),
     "| coups in sample:", sum(mdat$coup_attempt),
-    "of", sum(panel$coup_attempt), "\n")
+    "of", n_coups, "\n")
 cat("coups in the no-controls sample:",
     sum(panel$coup_attempt[!is.na(panel$spei12_dec_l1)]), "\n")
 
@@ -500,7 +506,7 @@ if (file.exists(path_pw)) {
                          returnclass = "sf")
   africa$iso3c <- countrycode(africa$admin, "country.name", "iso3c")
   africa <- africa[!is.na(africa$iso3c), ]
-  
+
   pop <- geodata::population(2020, res = 10, path = "Data/raw")
   r12 <- rast(path_spei12)
   nc  <- nc_open(path_spei12)
@@ -518,7 +524,7 @@ if (file.exists(path_pw)) {
   # weight zero instead of dropping the whole country
   pop05 <- terra::aggregate(pop, fact = 3, fun = "mean", na.rm = TRUE)
   popc  <- terra::resample(pop05, r12[[1]], method = "near") * cellSize(r12[[1]], unit = "km")
-  
+
   wtab <- exact_extract(r12, africa, "weighted_mean", weights = popc,
                         default_weight = 0, progress = FALSE)
   wtab <- data.frame(iso3c = africa$iso3c, wtab)
@@ -529,12 +535,18 @@ if (file.exists(path_pw)) {
   saveRDS(spei12w, path_pw)
 }
 
-panel <- panel %>%
-  select(-any_of(c("spei12_dec_pw", "spei12_pw_l1"))) %>%   # idempotent re-runs
-  left_join(spei12w, by = c("iso3c", "year")) %>%
+# the lag is built on the complete weighted series (all years of every
+# polygon country) before the join, in line with the unweighted lags
+spei12w <- spei12w %>%
+  select(iso3c, year, spei12_dec_pw) %>%
+  arrange(iso3c, year) %>%
   group_by(iso3c) %>%
   mutate(spei12_pw_l1 = dplyr::lag(spei12_dec_pw, 1)) %>%
   ungroup()
+
+panel <- panel %>%
+  select(-any_of(c("spei12_dec_pw", "spei12_pw_l1"))) %>%   # idempotent re-runs
+  left_join(spei12w, by = c("iso3c", "year"))
 
 m_pw <- glm(coup_attempt ~ spei12_pw_l1 + gdp_growth_w + mil_exp + decade,
             data = panel, family = binomial)
@@ -550,7 +562,7 @@ panel_pre <- panel %>% filter(year <= 2019) %>% mutate(decade = droplevels(decad
 m_pre20 <- glm(coup_attempt ~ spei12_dec_l1 + gdp_growth_w + mil_exp + decade,
                data = panel_pre, family = binomial)
 coeftest(m_pre20, vcov = vcovCL(m_pre20, cluster = ~ iso3c, data = panel_pre))
-cat("coup attempts 1990-2019:", sum(panel_pre$coup_attempt), "of 77\n")
+cat("coup attempts 1990-2019:", sum(panel_pre$coup_attempt), "of", n_coups, "\n")
 
 cc <- panel %>% filter(!is.na(spei12_dec_l1), !is.na(gdp_growth_w), !is.na(mil_exp))
 cat("main estimation sample after state-membership filter: N =", nrow(cc), "\n")
@@ -570,7 +582,7 @@ panel_nw <- panel %>% filter(!iso3c %in% wave)
 m_nowave <- glm(coup_attempt ~ spei12_dec_l1 + gdp_growth_w + mil_exp + decade,
                 data = panel_nw, family = binomial)
 coeftest(m_nowave, vcov = vcovCL(m_nowave, cluster = ~ iso3c, data = panel_nw))
-cat("coup attempts without the wave countries:", sum(panel_nw$coup_attempt), "of 77\n")
+cat("coup attempts without the wave countries:", sum(panel_nw$coup_attempt), "of", n_coups, "\n")
 
 # (xiv) placebo: future drought (t+1) must not predict current coups;
 #       estimated jointly with t-1, because drought persistence would let
@@ -595,9 +607,9 @@ m_split <- glm(coup_attempt ~ dry_l1 + wet_l1 + gdp_growth_w + mil_exp + decade,
                data = panel, family = binomial)
 coeftest(m_split, vcov = vcovCL(m_split, cluster = ~ iso3c, data = panel))
 
-# (xvi) year fixed effects via Firth logit: with only 77 events, a full set
-#       of year dummies gives roughly two events per parameter, and years
-#       without a single coup attempt are perfectly predicted (quasi-
+# (xvi) year fixed effects via Firth logit: with only 80 coup years, a full
+#       set of year dummies gives roughly two events per parameter, and
+#       years without a single coup attempt are perfectly predicted (quasi-
 #       complete separation); the penalised likelihood handles both
 print(table(factor(panel$year[panel$coup_attempt == 1],
                    levels = year_start:year_end)))  # zero-coup years visible
@@ -607,7 +619,7 @@ cat("Year-FE Firth: SPEI-12 t-1 =", round(coef(m_yearfe)["spei12_dec_l1"], 3),
     "| p =", signif(m_yearfe$prob["spei12_dec_l1"], 3), "\n")
 
 # (xvii) military control and sample composition: listwise deletion costs
-#        31 of the 77 coup years, almost all of them through military
+#        34 of the 80 coup years, almost all of them through military
 #        expenditure as a share of government expenditure. The check
 #        replaces that series with military expenditure as a share of GDP
 #        (SIPRI via WDI, wider coverage), drops the military control
@@ -617,7 +629,7 @@ cat("Year-FE Firth: SPEI-12 t-1 =", round(coef(m_yearfe)["spei12_dec_l1"], 3),
 
 # which series is the binding constraint among the coup years?
 vars_main <- c("spei12_dec_l1", "gdp_growth_w", "mil_exp")
-cat("missing values among the", sum(panel$coup_attempt), "coup years:\n")
+cat("missing values among the", n_coups, "coup years:\n")
 print(colSums(is.na(panel[panel$coup_attempt == 1, vars_main])))
 
 # alternative military control, cached like the other downloads
