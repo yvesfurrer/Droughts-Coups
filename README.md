@@ -4,7 +4,7 @@ Replication materials for the master's seminar paper "Droughts and Coups d'État
 
 ## Research question
 
-What is the effect of droughts on coup attempts in Africa? The analysis covers 52 African countries, 1990 to 2023, using a country-year panel.
+What is the association between droughts and coup attempts in Africa? The analysis covers 52 African countries, 1990 to 2023, using a country-year panel.
 
 ## Main finding
 
