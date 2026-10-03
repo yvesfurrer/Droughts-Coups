@@ -4,7 +4,7 @@ Replication materials for the master's seminar paper "Droughts and Coups d'État
 
 ## Research question
 
-Droughts are climatological events that cannot be caused by coups, which rules out reverse causality and makes a causal reading plausible. Because the design cannot rule out time-varying confounders, the estimates are nevertheless reported as associations. 
+What is the effect of droughts on coup attempts in Africa? Droughts are climatological events that cannot be caused by coups, which rules out reverse causality and makes a causal reading plausible. Because the design cannot rule out time-varying confounders, the estimates are nevertheless reported as associations. 
 
 ## Main finding
 
